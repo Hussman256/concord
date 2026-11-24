@@ -746,6 +746,30 @@ describe("Concord", () => {
     expect(assetRows()).toBe(before + 1);
   });
 
+  it("refuses a fromLedger older than the RPC retains, blocking or deferred", async () => {
+    chain.oldest = 50;
+    const assetRows = () => concord.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM assets")!.n;
+    const before = assetRows();
+    const retained = /older than the RPC retains \(oldest 50\)/;
+
+    // Blocking: the watch rejects and rolls its row back.
+    const blocking = `OLDB:${key()}`;
+    const refused = await concord.watchAsset({ network: "testnet", asset: blocking, fromLedger: 10 }).catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(Invalid);
+    expect((refused as Error).message).toMatch(retained);
+    expect(assetRows()).toBe(before);
+    expect(concord.db.get("SELECT id FROM assets WHERE code = 'OLDB'")).toBeUndefined();
+
+    // Deferred: the row is kept, still indexing, and carries the same error once its pass fails.
+    const deferred = await concord.watchAsset({ network: "testnet", asset: `OLDD:${key()}`, fromLedger: 10 }, { defer: true });
+    expect(deferred).toMatchObject({ code: "OLDD", state: "indexing" });
+    await expect(concord.sync(deferred.id)).rejects.toThrow(retained);
+    const stuck = concord.asset(deferred.id);
+    expect(stuck.state).toBe("indexing");
+    expect(stuck.syncError).toMatch(retained);
+    expect(assetRows()).toBe(before + 1);
+  });
+
   it("rejects a register from another asset and an unknown register id", async () => {
     const reg = concord.importRegister("FUND", { csv: `holder_id,account,units\nA,${h1},90\n`, asOf: at(40) });
     await concord.watchAsset({ network: "testnet", asset: `OTHER:${issuer}`, fromLedger: 1 });
