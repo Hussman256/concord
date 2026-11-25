@@ -1644,6 +1644,29 @@ describe("Concord", () => {
     expect(() => concord.asset("FUND")).toThrow(NotFound);
   });
 
+  it("unwatchAsset waits for an in-flight sync, so no events land in the asset watched again", async () => {
+    const held = chain.hold();
+    const pass = concord.sync("FUND");
+    await held.entered;
+
+    const unwatched = concord.unwatchAsset("FUND");
+    const rewatch = () => concord.watchAsset({ network: "testnet", asset: `FUND:${issuer}`, fromLedger: 1 });
+    // While the pass is held, the old asset is still there. An unwatch that did not wait for the
+    // pass would already have deleted it, and this re-watch would succeed. The held pass would
+    // then write its page of events into the new asset.
+    const early = await rewatch().catch((err: unknown) => err);
+
+    held.release();
+    await Promise.allSettled([pass]);
+    await unwatched;
+    const fund = early instanceof Invalid ? await rewatch() : (early as Awaited<ReturnType<typeof rewatch>>);
+
+    expect(concord.events(fund.id)).toEqual([]);
+    expect(concord.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE asset_id = ?", fund.id)!.n).toBe(0);
+    expect(early).toBeInstanceOf(Invalid);
+    expect((early as Error).message).toBe("FUND is already watched");
+  });
+
   it("rebuilds from fresh opening balances and keeps the books", async () => {
     await concord.sync("FUND");
     const reg = concord.importRegister("FUND", { csv: `holder_id,account,units\nA,${h1},90\n`, asOf: at(40) });

@@ -101,6 +101,19 @@ export class FakeChain implements ChainSource {
       this.oldest = Math.max(this.oldest, this.latest - options.retain + 1);
     }
   }
+
+  /**
+   * Hold getEvents until release() is called. `entered` resolves once a call is waiting on the
+   * hold, so a test can act while a sync pass is known to be in flight, without sleeping.
+   */
+  hold(): { entered: Promise<void>; release: () => void } {
+    let entered!: () => void;
+    let release!: () => void;
+    const whenEntered = new Promise<void>((resolve) => (entered = resolve));
+    this.gate = new Promise<void>((resolve) => (release = resolve));
+    this.onGetEvents = () => entered();
+    return { entered: whenEntered, release };
+  }
 }
 
 export interface Harness {
